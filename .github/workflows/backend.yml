@@ -1,0 +1,114 @@
+name: Deploy Backend -> Contoso.WebApi and Contoso.FunctionApp
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+env:
+  AZURE_WEBAPP_FRONTEND: 'contoso-webapp'
+  AZURE_WEBAPP_NAME: 'contoso-api'    # set this to your application's name
+  AZURE_WEBAPP_PACKAGE_PATH: '.'      # set this to the path to your web app project, defaults to the repository root
+  DOTNET_VERSION: '3.1' 
+  working-directory: ./src/Contoso.WebApi        # set this to the dot net version to use
+  working-directory-frontend: ./src/Contoso.Web
+  working-directory-functionapp: ./src/Contoso.FunctionApp
+  ERROR_FLAG: false
+  AZURE_FUNCTIONAPP_NAME: 'contoso-function' # set this to your application's name
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.'    # set this to the path to your web app project, defaults to the repository root
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backendwebapi: ${{ steps.filter.outputs.backendwebapi }}
+      backendfunctionapp: ${{ steps.filter.outputs.backendfunctionapp }}
+    steps:
+    - uses: actions/checkout@master
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        filters: |
+          backendwebapi:
+            - 'src/Contoso.WebApi/**'
+          backendfunctionapp:
+            - 'src/Contoso.FunctionApp/**'
+
+  build-and-deploy-WebApi:
+    needs: changes
+    if: ${{ needs.changes.outputs.backendwebapi == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+
+    # checkout the repo
+    - uses: actions/checkout@master
+    - uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Setup__.net__core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }} 
+
+    - name: Print working directory
+      run: |
+        pwd
+      
+    # Run dotnet build and publish
+    - name: dotnet build and publish
+      run: |
+        dotnet restore
+        dotnet build --configuration Release
+        dotnet publish -c Release -o '${{ env.AZURE_WEBAPP_PACKAGE_PATH }}'
+      working-directory: ${{ env.working-directory }}
+    
+    #If success then deploy condition here
+       
+    - name: 'Run Azure webapp deploy action using publish profile credentials'
+      uses: azure/webapps-deploy@v2
+      with: 
+        app-name: ${{ env.AZURE_WEBAPP_NAME }} # Replace with your app name
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE  }} # Define secret variable in repository settings as per action documentation
+        package: '${{ env.working-directory }}'
+    
+    #If failure raise issue
+  
+    - name: logout
+      run: |
+        az logout
+  
+  build-and-deploy-function-app:
+    needs: changes
+    if: ${{ needs.changes.outputs.backendfunctionapp == 'true' }}
+    runs-on: windows-latest
+    steps:
+    - name: 'Checkout GitHub Action'
+      uses: actions/checkout@master
+
+    - name: Setup DotNet ${{ env.DOTNET_VERSION }} Environment
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: 'Resolve Project Dependencies Using Dotnet'
+      shell: pwsh
+      run: |
+        pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
+        dotnet build --configuration Release --output ./output
+        popd
+      working-directory: ${{ env.working-directory-functionapp }}
+    - name: 'Run Azure Functions Action'
+      uses: Azure/functions-action@v1
+      id: fa
+      with:
+        app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+        package: '${{ env.working-directory-functionapp }}/output'
+        publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+  
+    
+    
+# Issue Creation after failure
+# IF succeeds -> Deploy
